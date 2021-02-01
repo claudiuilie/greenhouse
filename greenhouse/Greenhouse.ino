@@ -5,6 +5,7 @@
 #include <avr/wdt.h>
 #include <dht.h>
 #include <ArduinoJson.h>
+#include <SimpleTimer.h>
 
 // Enter a MAC address for your controller below.
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x2D };
@@ -28,7 +29,7 @@ aREST rest = aREST();
 
 dht DHT;
 
-// define variables
+// define api variables
 int temperature;
 int humidity;
 int soilMoisture;
@@ -37,8 +38,18 @@ bool fanStatus = HIGH;
 bool lampVegStatus = HIGH;
 bool lampFruitStatus = HIGH;
 
-// Declare functions to be exposed to the API
-int sonoffStatus(String command);
+// define soil moisture sensor range
+const int dry = 650;
+const int wet = 530;
+
+// define pomp variables
+int countdownRange = 5; // interval in s rulare pompa
+int countdownSleep = 8; // interval in s pauza pompa
+int countdown = 0;
+boolean pompFirstRun = false;
+
+SimpleTimer timer;
+
 
 void setup(void)
 {
@@ -58,6 +69,9 @@ void setup(void)
   digitalWrite(LAMP_FRUIT_RELAY, HIGH);
   
   //Define variables Object
+  // Give name & ID to the device (ID should be 6 characters long)
+  rest.set_id("1");
+  rest.set_name("greenhouse");
   rest.variable("temperature",&temperature);
   rest.variable("humidity",&humidity);
   rest.variable("soil_moisture",&soilMoisture);
@@ -65,13 +79,15 @@ void setup(void)
   rest.variable("fan_off",&fanStatus);
   rest.variable("veg_lamp_off",&lampVegStatus);
   rest.variable("fruit_lamp_off",&lampFruitStatus);
+  
   // Function to be exposed
-  rest.function("sonoff",sonoffStatus);
+  rest.function("sleep",sleep);
+  rest.function("pomp",pomp);
+  rest.function("fan",fan);
+  rest.function("vegPhase",lampVegPhase);
+  rest.function("fruitPhase",lampFruitPhase);
 
-  // Give name & ID to the device (ID should be 6 characters long)
-  rest.set_id("1");
-  rest.set_name("greenhouse");
-
+  
   // Start the Ethernet connection and the server
   if (Ethernet.begin(mac) == 0) {
     Serial.println("Failed to configure Ethernet using DHCP");
@@ -93,19 +109,204 @@ void loop() {
       
       temperature = (int)DHT.temperature;
       humidity = (int)DHT.humidity;
-      soilMoisture = analogRead(A3);
+      soilMoisture = analogRead(A0);
       pompStatus = digitalRead(POMP_RELAY);
       fanStatus = digitalRead(FAN_RELAY);
       lampVegStatus = digitalRead(LAMP_VEG_RELAY);
       lampFruitStatus = digitalRead(LAMP_FRUIT_RELAY);
       
     }
+  timer.run();
   rest.handle(client);
   wdt_reset();
 }
 
 // Custom function accessible by the API
-int sonoffStatus(String command) {
- 
-  return 1;
+int sleep(String command){
+  int comm = command.toInt();
+  
+  if(comm == 1){
+      digitalWrite(FAN_RELAY, HIGH);
+      delay(50);
+      digitalWrite(LAMP_VEG_RELAY, HIGH);
+      delay(50);
+      digitalWrite(LAMP_FRUIT_RELAY, HIGH);
+      delay(50);
+      return 1;
+    }else{
+      return 0;   
+   }
+  }
+
+int pomp(String command) {
+  //example ?params=1&10:5 (status&runtime:sleeptime)
+  bool pompOff = digitalRead(POMP_RELAY); 
+
+  String xval = getValue(command, '&', 0);
+  String yval = getValue(command, '&', 1);
+  String x = getValue(yval, ':', 0);
+  String y = getValue(yval, ':', 1);
+  int comm = xval.toInt();
+
+  switch(comm){
+
+    case 0:
+      digitalWrite(POMP_RELAY, HIGH);
+      timer.disable(0);
+      timer.disable(1);
+      timer.disable(2);
+      pompFirstRun = false;
+      countdown = 0;
+      Serial.println("Pomp stopped.");
+      return 1;
+    break;
+
+    case 1:
+      if(pompOff) {
+          countdownSleep = y.toInt();
+          countdownRange = x.toInt();
+          startPomp();
+        return 1;
+      }else{
+        Serial.println("Pomp already active!");
+        return 0;
+      }
+    break;
+
+    default:
+      return 0;
+    }
+}
+
+void runPomp(){
+
+  if(countdown < countdownRange - 1){
+    countdown += 1;
+    Serial.print("Running: "); 
+    Serial.print(countdown);
+    Serial.print(" s");
+    Serial.println();
+  }else{
+    Serial.println("Timer exausted.");
+    if (pompFirstRun == false){
+      countdown = 0;
+      pompFirstRun = true;
+      stopPomp();
+      timer.setTimer(1000, sleepPomp, countdownSleep );
+    }else{
+      stopPomp();
+      countdown = 0;
+      pompFirstRun = false;
+    }
+    Serial.println(countdown);
+  }
+}
+
+void sleepPomp() {
+  
+  if(countdown < countdownSleep - 1){
+    countdown += 1;
+    Serial.print("Sleeping: "); 
+    Serial.print(countdown);
+    Serial.print(" s");
+    Serial.println();
+  }else{
+    Serial.println("Timer exausted.");
+    countdown = 0;
+    startPomp();
+  }
+}
+
+void startPomp() {
+  
+  int pompOff = digitalRead(POMP_RELAY);
+  if(pompOff && countdown == 0){
+       timer.setTimer(1000, runPomp, countdownRange );
+       digitalWrite(POMP_RELAY,LOW);
+       Serial.println("Pomp Started");
+    }else{ 
+    Serial.println("Pomp is already active");  
+  }
+}
+
+void stopPomp() {
+  digitalWrite(POMP_RELAY,HIGH);
+  Serial.println("Pomp Stopped");
+}
+
+
+int fan(String input){  
+  int comm = input.toInt();
+  switch(comm){
+      case 0:
+        digitalWrite(FAN_RELAY, HIGH);
+        return 1;
+      break;
+        
+      case 1:
+        digitalWrite(FAN_RELAY, LOW);
+        return 1;
+      break;
+
+      default:
+        return 0;
+    }
+}
+
+int lampVegPhase(String command){
+    int comm = command.toInt();
+    
+    digitalWrite(LAMP_VEG_RELAY, HIGH);
+    digitalWrite(LAMP_FRUIT_RELAY, HIGH);
+    
+    switch(comm){
+      case 0:
+        digitalWrite(LAMP_VEG_RELAY, HIGH);
+        return 1;
+      break;
+
+      case 1:
+        digitalWrite(LAMP_VEG_RELAY, LOW);
+        return 1;
+      break;
+      
+      default:
+        return 0;
+    }
+}
+
+int lampFruitPhase(String command){
+    int comm = command.toInt();
+    
+    switch(comm){
+      case 0:
+        digitalWrite(LAMP_FRUIT_RELAY, HIGH);
+        return 1;
+      break;
+
+      case 1:
+        digitalWrite(LAMP_FRUIT_RELAY, LOW);
+        digitalWrite(LAMP_VEG_RELAY, LOW);
+        return 1;
+      break;
+      
+      default:
+        return 0;
+    }
+}
+
+String getValue(String data, char separator, int index)
+{
+    int found = 0;
+    int strIndex[] = { 0, -1 };
+    int maxIndex = data.length() - 1;
+
+    for (int i = 0; i <= maxIndex && found <= index; i++) {
+        if (data.charAt(i) == separator || i == maxIndex) {
+            found++;
+            strIndex[0] = strIndex[1] + 1;
+            strIndex[1] = (i == maxIndex) ? i+1 : i;
+        }
+    }
+    return found > index ? data.substring(strIndex[0], strIndex[1]) : "";
 }
