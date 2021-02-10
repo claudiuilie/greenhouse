@@ -3,9 +3,8 @@
 #include <Ethernet.h>
 #include <aREST.h>
 #include <avr/wdt.h>
-#include <dht.h>
-#include <ArduinoJson.h>
-#include <SimpleTimer.h>
+#include <dht.h> // DHTLib
+#include "SimpleTimer.h"
 
 // Enter a MAC address for your controller below.
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x2D };
@@ -26,6 +25,8 @@ aREST rest = aREST();
 #define FAN_RELAY 4 // fan
 #define LAMP_VEG_RELAY 5 // vegLamp
 #define LAMP_FRUIT_RELAY 6 // fruitLamp
+#define FAN_IN 44
+#define FAN_OUT 45
 
 dht DHT;
 
@@ -34,13 +35,17 @@ int temperature;
 int humidity;
 int soilMoisture;
 bool pompStatus = HIGH;
-bool fanStatus = HIGH;
+int fanInValue = 0;
+int fanOutValue = 0;
 bool lampVegStatus = HIGH;
 bool lampFruitStatus = HIGH;
 
 // define soil moisture sensor range
 const int dry = 650;
 const int wet = 530;
+
+//fan constants range
+const int maxFan = 255;
 
 // define pomp variables
 int countdownRange = 5; // interval in s rulare pompa
@@ -53,20 +58,26 @@ SimpleTimer timer;
 
 void setup(void)
 {
+//seet D44 and d45 freq to 31h
+TCCR5B = TCCR5B & B11111000 | B00000101; 
   // Start Serial
   Serial.begin(115200);
-  
   // pin modes (output or input)
   pinMode(POMP_RELAY, OUTPUT);
   pinMode(FAN_RELAY, OUTPUT);
   pinMode(LAMP_VEG_RELAY, OUTPUT);
   pinMode(LAMP_FRUIT_RELAY, OUTPUT);
-  
+  pinMode(FAN_IN, OUTPUT);
+  pinMode(FAN_OUT, OUTPUT);
+
+
   //At start set the relay to off;
   digitalWrite(POMP_RELAY, HIGH);
   digitalWrite(FAN_RELAY, HIGH);
   digitalWrite(LAMP_VEG_RELAY, HIGH);
   digitalWrite(LAMP_FRUIT_RELAY, HIGH);
+  analogWrite(FAN_IN, fanInValue);
+  analogWrite(FAN_OUT, fanOutValue);
   
   //Define variables Object
   // Give name & ID to the device (ID should be 6 characters long)
@@ -75,15 +86,17 @@ void setup(void)
   rest.variable("temperature",&temperature);
   rest.variable("humidity",&humidity);
   rest.variable("soil_moisture",&soilMoisture);
+  rest.variable("fan_in",&fanInValue);
+  rest.variable("fan_out",&fanOutValue);
   rest.variable("pomp_off",&pompStatus);
-  rest.variable("fan_off",&fanStatus);
   rest.variable("veg_lamp_off",&lampVegStatus);
   rest.variable("fruit_lamp_off",&lampFruitStatus);
   
   // Function to be exposed
   rest.function("sleep",sleep);
   rest.function("pomp",pomp);
-  rest.function("fan",fan);
+  rest.function("fanIn",startInFan);
+  rest.function("fanOut",startOutFan);
   rest.function("vegPhase",lampVegPhase);
   rest.function("fruitPhase",lampFruitPhase);
 
@@ -111,14 +124,45 @@ void loop() {
       humidity = (int)DHT.humidity;
       soilMoisture = analogRead(A0);
       pompStatus = digitalRead(POMP_RELAY);
-      fanStatus = digitalRead(FAN_RELAY);
       lampVegStatus = digitalRead(LAMP_VEG_RELAY);
       lampFruitStatus = digitalRead(LAMP_FRUIT_RELAY);
-      
     }
   timer.run();
   rest.handle(client);
   wdt_reset();
+}
+
+int procentToValue(int procent){
+    Serial.println(procent);
+     Serial.println(maxFan);
+    Serial.println((procent * maxFan) / 100 );
+    return (procent / 100) * maxFan;
+  }
+
+int startInFan(String command){
+  
+  int value = command.toInt();
+  int setValue = procentToValue(value);
+  if(value > 0 && value <= 255){
+      analogWrite(FAN_IN,value);
+      fanInValue = value;
+      return 1;  
+  }else{
+      return 0;
+  }
+}
+
+int startOutFan(String command){
+  
+  int value = command.toInt();
+  int setValue = procentToValue(value);
+    if(value > 0 && value <= 255){
+      analogWrite(FAN_OUT,value);
+      fanOutValue = value;
+      return 1;  
+  }else{
+      return 0;
+  }
 }
 
 // Custom function accessible by the API
@@ -309,4 +353,36 @@ String getValue(String data, char separator, int index)
         }
     }
     return found > index ? data.substring(strIndex[0], strIndex[1]) : "";
+}
+
+void setPwmFrequency(int pin, int divisor) {
+  byte mode;
+  if(pin == 5 || pin == 6 || pin == 9 || pin == 10) {
+    switch(divisor) {
+      case 1: mode = 0x01; break;
+      case 8: mode = 0x02; break;
+      case 64: mode = 0x03; break;
+      case 256: mode = 0x04; break;
+      case 1024: mode = 0x05; break; Serial.println("set to 1024");
+      default: return;
+    }
+    if(pin == 5 || pin == 6) {
+      TCCR0B = TCCR0B & 0b11111000 | mode;
+    } else {
+      TCCR1B = TCCR1B & 0b11111000 | mode;
+    }
+  } else if(pin == 3 || pin == 11) {
+    switch(divisor) {
+      case 1: mode = 0x01; break;
+      case 8: mode = 0x02; break;
+      case 32: mode = 0x03; break;
+      case 64: mode = 0x04; break;
+      case 128: mode = 0x05; break;
+      case 256: mode = 0x06; break;
+      case 1024: mode = 0x07; break;
+      default: return;
+    }
+    TCCR2B = TCCR2B & 0b11111000 | mode;
+    
+  }
 }
