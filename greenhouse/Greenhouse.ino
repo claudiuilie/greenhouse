@@ -39,10 +39,8 @@ int fanInValue = 0;
 int fanOutValue = 0;
 bool lampVegStatus = HIGH;
 bool lampFruitStatus = HIGH;
-
-// define soil moisture sensor range
-const int dry = 650;
-const int wet = 530;
+const int wetSensor = 560;
+const int drySensor = 770;
 
 //fan constants range
 const int maxFan = 255;
@@ -122,7 +120,7 @@ void loop() {
       
       temperature = (int)DHT.temperature;
       humidity = (int)DHT.humidity;
-      soilMoisture = analogRead(A0);
+      soilMoisture = map(analogRead(A0),drySensor,wetSensor, 0 ,100);
       pompStatus = digitalRead(POMP_RELAY);
       lampVegStatus = digitalRead(LAMP_VEG_RELAY);
       lampFruitStatus = digitalRead(LAMP_FRUIT_RELAY);
@@ -143,7 +141,7 @@ int startInFan(String command){
   
   int value = command.toInt();
   int setValue = procentToValue(value);
-  if(value > 0 && value <= 255){
+  if(value => 0 && value <= 255){
       analogWrite(FAN_IN,value);
       fanInValue = value;
       return 1;  
