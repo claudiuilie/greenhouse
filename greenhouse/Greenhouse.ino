@@ -8,10 +8,10 @@
 
 // Enter a MAC address for your controller below.
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0x2D };
-byte gateway[] = { 192, 168, 1, 254 }; //               <------- PUT YOUR ROUTERS IP Address to which your shield is connected Here
+byte gateway[] = { 192, 168, 0, 1 }; //               <------- PUT YOUR ROUTERS IP Address to which your shield is connected Here
 byte subnet[] = { 255, 255, 255, 0 }; //                <------- It will be as it is in most of the cases
 // IP address in case DHCP fails
-IPAddress ip(192,168,1,200);
+IPAddress ip(192,168,0,102);
 
 // Ethernet server
 EthernetServer server(80);
@@ -20,9 +20,8 @@ EthernetServer server(80);
 aREST rest = aREST();
 
 // Variables to be exposed to the API
-#define TEMP_HUM_SENSOR 2 // temp/hum sensor
+#define TEMP_HUM_SENSOR1 2 // temp/hum sensor
 #define POMP_RELAY 3 // waterPomp
-#define FAN_RELAY 4 // fan
 #define LAMP_VEG_RELAY 5 // vegLamp
 #define LAMP_FRUIT_RELAY 6 // fruitLamp
 #define FAN_IN 44
@@ -33,7 +32,9 @@ dht DHT;
 // define api variables
 int temperature;
 int humidity;
-int soilMoisture;
+int soilMoisture1;
+int soilMoisture2;
+long waterLevel;
 bool pompStatus = HIGH;
 int fanInValue = 0;
 int fanOutValue = 0;
@@ -41,7 +42,8 @@ bool lampVegStatus = HIGH;
 bool lampFruitStatus = HIGH;
 const int wetSensor = 560;
 const int drySensor = 770;
-
+const int pingPin = 9; // Trigger Pin of Ultrasonic Sensor
+const int echoPin = 8; // Echo Pin of Ultrasonic Sensor
 //fan constants range
 const int maxFan = 255;
 
@@ -62,7 +64,6 @@ TCCR5B = TCCR5B & B11111000 | B00000101;
   Serial.begin(115200);
   // pin modes (output or input)
   pinMode(POMP_RELAY, OUTPUT);
-  pinMode(FAN_RELAY, OUTPUT);
   pinMode(LAMP_VEG_RELAY, OUTPUT);
   pinMode(LAMP_FRUIT_RELAY, OUTPUT);
   pinMode(FAN_IN, OUTPUT);
@@ -71,7 +72,6 @@ TCCR5B = TCCR5B & B11111000 | B00000101;
 
   //At start set the relay to off;
   digitalWrite(POMP_RELAY, HIGH);
-  digitalWrite(FAN_RELAY, HIGH);
   digitalWrite(LAMP_VEG_RELAY, HIGH);
   digitalWrite(LAMP_FRUIT_RELAY, HIGH);
   analogWrite(FAN_IN, fanInValue);
@@ -83,7 +83,9 @@ TCCR5B = TCCR5B & B11111000 | B00000101;
   rest.set_name("greenhouse");
   rest.variable("temperature",&temperature);
   rest.variable("humidity",&humidity);
-  rest.variable("soil_moisture",&soilMoisture);
+  rest.variable("water_level",&waterLevel);
+  rest.variable("soil_moisture_1",&soilMoisture1);
+  rest.variable("soil_moisture_2",&soilMoisture2);
   rest.variable("fan_in",&fanInValue);
   rest.variable("fan_out",&fanOutValue);
   rest.variable("pomp_off",&pompStatus);
@@ -116,11 +118,14 @@ void loop() {
   EthernetClient client = server.available();
   if (client) {
 
-      int chk = DHT.read22(TEMP_HUM_SENSOR); 
+      int chk = DHT.read22(TEMP_HUM_SENSOR1); 
+      int chk2 = DHT.read22(TEMP_HUM_SENSOR1); 
       
       temperature = (int)DHT.temperature;
       humidity = (int)DHT.humidity;
-      soilMoisture = map(analogRead(A0),drySensor,wetSensor, 0 ,100);
+      soilMoisture1 = analogRead(A0);
+      soilMoisture2 = analogRead(A2);
+      waterLevel = measureDistance();
       pompStatus = digitalRead(POMP_RELAY);
       lampVegStatus = digitalRead(LAMP_VEG_RELAY);
       lampFruitStatus = digitalRead(LAMP_FRUIT_RELAY);
@@ -141,7 +146,7 @@ int startInFan(String command){
   
   int value = command.toInt();
   int setValue = procentToValue(value);
-  if(value => 0 && value <= 255){
+  if(value >= 0 && value <= 255){
       analogWrite(FAN_IN,value);
       fanInValue = value;
       return 1;  
@@ -154,7 +159,7 @@ int startOutFan(String command){
   
   int value = command.toInt();
   int setValue = procentToValue(value);
-    if(value > 0 && value <= 255){
+    if(value >= 0 && value <= 255){
       analogWrite(FAN_OUT,value);
       fanOutValue = value;
       return 1;  
@@ -168,8 +173,6 @@ int sleep(String command){
   int comm = command.toInt();
   
   if(comm == 1){
-      digitalWrite(FAN_RELAY, HIGH);
-      delay(50);
       digitalWrite(LAMP_VEG_RELAY, HIGH);
       delay(50);
       digitalWrite(LAMP_FRUIT_RELAY, HIGH);
@@ -276,25 +279,6 @@ void stopPomp() {
   Serial.println("Pomp Stopped");
 }
 
-
-int fan(String input){  
-  int comm = input.toInt();
-  switch(comm){
-      case 0:
-        digitalWrite(FAN_RELAY, HIGH);
-        return 1;
-      break;
-        
-      case 1:
-        digitalWrite(FAN_RELAY, LOW);
-        return 1;
-      break;
-
-      default:
-        return 0;
-    }
-}
-
 int lampVegPhase(String command){
     int comm = command.toInt();
     
@@ -384,3 +368,20 @@ void setPwmFrequency(int pin, int divisor) {
     
   }
 }
+
+long measureDistance(){
+  
+   long  duration;
+   pinMode(pingPin, OUTPUT);
+   digitalWrite(pingPin, LOW);
+   delayMicroseconds(2);
+   digitalWrite(pingPin, HIGH);
+   delayMicroseconds(10);
+   digitalWrite(pingPin, LOW);
+   pinMode(echoPin, INPUT);
+   duration = pulseIn(echoPin, HIGH);
+   return microsecondsToMillimeters(duration);
+}
+
+long microsecondsToMillimeters(long microseconds)
+{return microseconds / 2.9 / 2;}
